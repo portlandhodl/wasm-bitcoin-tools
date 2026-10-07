@@ -268,9 +268,6 @@ Setup (from the repository root):
     }
 
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-    /* safety warning: always first on the page */
-    .safety-banner { margin: 0; padding: 12px 16px; background: #b42318; color: #fff; text-align: center;
-                     font: 600 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: .01em; }
     /* safety gate: a notice the user must acknowledge whenever the page isn't opened from a local file */
     #safety_gate { position: fixed; inset: 0; z-index: 1000; display: flex; overflow-y: auto; padding: 24px 16px;
                    background: color-mix(in srgb, var(--bg) 70%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
@@ -370,7 +367,6 @@ Setup (from the repository root):
     <div class="quote" id="quote"><q></q><cite></cite></div>
     <button class="loader-skip" id="loader_skip" type="button">Skip: look around while the machine boots</button>
 </div>
-<div class="safety-banner" role="alert">Do not use from GitHub Pages, ensure that you are offline before working with real Bitcoin</div>
 <main>
     <header class="hero">
         <div class="logo" aria-hidden="true">
