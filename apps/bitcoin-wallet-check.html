@@ -271,9 +271,87 @@ Setup (from the repository root):
     /* safety warning: always first on the page */
     .safety-banner { margin: 0; padding: 12px 16px; background: #b42318; color: #fff; text-align: center;
                      font: 600 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: .01em; }
+    /* safety gate: a notice the user must acknowledge whenever the page isn't opened from a local file */
+    #safety_gate { position: fixed; inset: 0; z-index: 1000; display: flex; overflow-y: auto; padding: 24px 16px;
+                   background: color-mix(in srgb, var(--bg) 70%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+                   color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    #safety_gate[hidden] { display: none; }
+    #safety_gate .gate-box { width: min(600px, 100%); margin: auto; padding: 26px 26px 22px; border-radius: 16px; background: var(--card);
+                             border: 1px solid var(--line); border-top: 6px solid var(--bad); box-shadow: var(--shadow); }
+    #safety_gate .kicker { font: 600 12px/1 system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--bad); }
+    #safety_gate h2 { display: block; margin: 8px 0 6px; font: 600 28px/1.15 var(--serif, Georgia, serif); color: var(--bad);
+                      letter-spacing: normal; text-transform: none; }
+    #safety_gate .where { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
+    #safety_gate ul { margin: 0; padding: 0; list-style: none; }
+    #safety_gate li { position: relative; margin: 8px 0; padding-left: 24px; font-weight: 600; }
+    #safety_gate li::before { content: "\26A0"; position: absolute; left: 0; color: var(--bad); }
+    #safety_gate .never { margin: 16px 0; padding: 12px; border-radius: 10px; background: var(--bad-bg); border: 1px solid var(--bad); color: var(--bad);
+                          text-align: center; font-size: 20px; font-weight: 800; letter-spacing: .04em; }
+    #safety_gate .ask { margin: 0 0 10px; color: var(--muted); }
+    #safety_gate .ask b { display: inline-block; min-width: 1.7em; padding: 0 6px; border-radius: 6px; background: var(--bad); color: var(--card);
+                          text-align: center; font-size: 17px; }
+    #safety_gate .keys { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
+    #safety_gate .keys button { padding: 10px 0; border: 1px solid var(--line2); border-radius: 8px; background: var(--card2, var(--card)); color: var(--fg);
+                                font: 600 17px/1 ui-monospace, Menlo, monospace; cursor: pointer; }
+    #safety_gate .keys button:hover, #safety_gate .keys button:focus-visible { border-color: var(--bad); color: var(--bad); outline: none; }
+    #safety_gate .wrong { min-height: 1.5em; margin: 10px 0 0; color: var(--bad); font-size: 13.5px; font-weight: 600; }
+    @media (max-width: 520px) { #safety_gate .keys { grid-template-columns: repeat(5, 1fr); } #safety_gate h2 { font-size: 23px; } }
 </style>
 </head>
 <body>
+<div id="safety_gate" role="alertdialog" aria-modal="true" aria-labelledby="gate_title" hidden>
+    <div class="gate-box">
+        <div class="kicker">Read before continuing</div>
+        <h2 id="gate_title">This page is not running offline</h2>
+        <p class="where">This page was loaded from <span id="gate_origin"></span>, not from a local file.</p>
+        <ul>
+            <li>Never use this tool on an online computer.</li>
+            <li>Only use it on an air-gapped computer: download it, disconnect from every network, then open the local copy.</li>
+            <li>Audit the source before you trust it with anything.</li>
+        </ul>
+        <div class="never">NEVER USE REAL BITCOINS</div>
+        <p class="ask">To confirm that you understand and agree, press <b id="gate_digit"></b> on your keyboard or below.</p>
+        <div class="keys" id="gate_keys"></div>
+        <p class="wrong" id="gate_wrong" aria-live="assertive"></p>
+    </div>
+</div>
+<script>
+// Anything but a local file gets the safety gate, acknowledged by pressing one randomly chosen digit.
+(() => {
+    if(location.protocol === "file:") return;
+    const gate = document.getElementById("safety_gate"), digit = String(1 + Math.floor(Math.random() * 9));
+    document.getElementById("gate_origin").textContent = location.origin;
+    document.getElementById("gate_digit").textContent = digit;
+    const keys = document.getElementById("gate_keys");
+    for(let n = 1; n <= 9; n++)
+    {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = n; b.onclick = () => answer(String(n));
+        keys.appendChild(b);
+    }
+    function answer(key)
+    {
+        if(key !== digit)
+        {
+            document.getElementById("gate_wrong").textContent = "That was " + key + ". Press " + digit + " to confirm.";
+            return;
+        }
+        gate.hidden = true;
+        window.removeEventListener("keydown", on_key, true);
+    }
+    function on_key(e)
+    {
+        // nothing behind the gate gets the keyboard until it's acknowledged
+        e.stopImmediatePropagation();
+        if(e.key === "Tab") return;
+        e.preventDefault();
+        if(/^[1-9]$/.test(e.key)) answer(e.key);
+    }
+    window.addEventListener("keydown", on_key, true);
+    gate.hidden = false;
+    keys.firstChild.focus();
+})();
+</script>
 <div id="loader" role="status" aria-live="polite">
     <div class="coin-stage" aria-hidden="true">
         <div class="coin-glow"></div>
