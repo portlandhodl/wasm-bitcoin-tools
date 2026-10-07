@@ -1,0 +1,1229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PSBT Finalizer</title>
+<link rel="icon" href="../v86_64/icons/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../v86_64/icons/icon-32.png" sizes="32x32" type="image/png">
+<!--
+Finalizes PSBTs with Bitcoin Core, inside an Alpine Linux machine emulated in this page. An
+unmodified, offline bitcoind at block 0 decodes the PSBTs, combines them (combinepsbt), fills
+in scripts from optional public descriptors (descriptorprocesspsbt), analyzes them and finalizes
+them (finalizepsbt). No wallet and no private key is involved.
+
+Timelocks need no chain: finalizing checks a script's after()/older() against the transaction's
+own nLockTime and nSequence, which every signature commits to, never against the chain tip.
+The tip only matters when the transaction is broadcast, so the page says when that can be.
+
+Setup (from the repository root):
+
+    ./scripts/setup.sh      # the emulator (v86_64 submodule), the Alpine guest, Bitcoin Core
+    ./scripts/serve.sh
+    open http://localhost:8000/apps/psbt-finalizer.html
+-->
+<script src="../v86_64/build/libv86.js"></script>
+<style>
+    :root {
+        color-scheme: dark;
+        --bg: #0a0b0d; --bg2: #121418; --fg: #ece7dd; --muted: #8f949c; --card: #111317; --card2: #15181d;
+        --line: #20242b; --line2: #2c323b;
+        --btc: #f7931a; --btc-strong: #ffac4a; --btc-bg: #24190b; --btc-fg: #1b1206;
+        --ok: #45cf96; --ok-bg: #0d2a1f; --bad: #ff7b6e; --bad-bg: #2d1412; --warn: #f5c451; --warn-bg: #2a2310;
+        --term-bg: #07080a; --term-fg: #d4d8de;
+        --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 12px 32px rgba(0, 0, 0, .35);
+        --serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
+           background: radial-gradient(900px 420px at 80% -8%, rgba(247, 147, 26, .13), transparent 60%), var(--bg); background-repeat: no-repeat; }
+    main { max-width: 1000px; margin: 0 auto; padding: 0 16px 56px; }
+    code, pre, .mono { font: 13px/1.45 var(--mono); }
+    a { color: var(--btc-strong); }
+    [hidden] { display: none !important; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+    h2 { font: 600 22px/1.2 var(--serif); margin: 44px 0 14px; display: flex; align-items: baseline; gap: 12px; }
+    h2 .n { font: 600 12px/1 system-ui, sans-serif; letter-spacing: .12em; color: var(--btc-strong); text-transform: uppercase; }
+    h3 { margin: 0 0 10px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+
+    /* header, as on the directory page */
+    header { padding: 44px 0 18px; }
+    .back { font-size: 13px; color: var(--muted); text-decoration: none; }
+    .back:hover { color: var(--btc-strong); }
+    .mark { width: 48px; height: 48px; display: block; margin: 22px 0 18px; }
+    h1 { font: 600 clamp(32px, 5.5vw, 50px)/1.05 var(--serif); margin: 0 0 14px; letter-spacing: -.015em; }
+    h1 em { font-style: italic; color: var(--btc); }
+    .lead { margin: 0; max-width: 66ch; font-size: 17px; color: var(--muted); }
+    .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+    .facts span { padding: 5px 11px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line2); color: var(--muted); }
+    .why { margin-top: 18px; padding: 14px 18px; border-left: 3px solid var(--btc); background: var(--card2); border-radius: 0 12px 12px 0;
+           font-size: 14px; color: var(--muted); max-width: 78ch; }
+    .why b { color: var(--fg); }
+
+    /* the trackers */
+    .tracker { padding: 20px 22px 18px; }
+    #machine { margin-top: 26px; }
+    .tracker .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .tracker .headline { font: 600 19px/1.3 var(--serif); }
+    .tracker .clock { margin-left: auto; font: 600 13px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+    .tracker .detail { color: var(--muted); font-size: 13.5px; margin-top: 4px; min-height: 1.55em; overflow-wrap: anywhere; }
+    ol.stages { list-style: none; margin: 16px 0 0; padding: 0; display: grid; grid-template-columns: repeat(var(--n), 1fr); gap: 4px; }
+    ol.stages li { min-width: 0; }
+    .seg { height: 12px; background: var(--bg2); position: relative; overflow: hidden; }
+    ol.stages li:first-child .seg { border-radius: 7px 0 0 7px; }
+    ol.stages li:last-child .seg { border-radius: 0 7px 7px 0; }
+    .seg i { position: absolute; inset: 0 auto 0 0; width: 0; transition: width .5s ease; }
+    li.done .seg i { width: 100%; background: #b8691a; }
+    li.skip .seg i { width: 100%; background: var(--line2); }
+    li.now .seg i { background: repeating-linear-gradient(-45deg, var(--btc) 0 8px, #ffb04d 8px 16px); background-size: 22.6px 22.6px;
+                    animation: stripes .9s linear infinite; min-width: 14%; }
+    li.fail .seg i { width: 100%; background: var(--bad); }
+    @keyframes stripes { to { background-position: 22.6px 0 } }
+    .stage-label { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 13px; color: var(--muted); }
+    .stage-label .ic { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--bg2); }
+    .stage-label .ic svg { width: 12px; height: 12px; }
+    li.done .stage-label, li.now .stage-label { color: var(--fg); }
+    li.done .ic { background: #b8691a; color: #fff; }
+    li.now .ic { background: var(--btc); color: var(--btc-fg); animation: ping 1.5s infinite; }
+    li.fail .ic { background: var(--bad); color: #fff; }
+    .stage-label b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stage-time { display: block; margin: 1px 0 0 29px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.4em; }
+    @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(247, 147, 26, .55) } 80%, 100% { box-shadow: 0 0 0 9px rgba(247, 147, 26, 0) } }
+    .tracker .foot { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+                     font-size: 12.5px; color: var(--muted); }
+    .tracker .foot .ok { color: var(--ok); }
+    .tracker.ready .headline::before { content: "\25CF"; color: var(--ok); margin-right: 8px; font-size: 14px; vertical-align: 2px; }
+    .tracker.failed .headline { color: var(--bad); }
+
+    /* input */
+    .input { display: grid; grid-template-columns: 1.5fr 1fr; overflow: hidden; }
+    .paste { padding: 20px 22px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; transition: background .15s; }
+    .paste.over { background: var(--btc-bg); }
+    .paste label.t { font-weight: 600; font-size: 14px; }
+    .paste small, .options small { color: var(--muted); font-size: 12.5px; }
+    textarea { font: 12px/1.45 var(--mono); padding: 10px 12px; border: 1px solid var(--line2); border-radius: 10px; background: var(--term-bg);
+               color: var(--fg); width: 100%; resize: vertical; }
+    #psbt_text { min-height: 150px; }
+    #desc_text { min-height: 70px; }
+    textarea:focus, select:focus { outline: 2px solid var(--btc); outline-offset: -1px; border-color: transparent; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 15px; border-radius: 9px; border: 1px solid var(--btc);
+           background: var(--btc); color: var(--btc-fg); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+    .btn:hover { background: #ffa53d; }
+    .btn.ghost { background: transparent; color: var(--fg); border-color: var(--line2); }
+    .btn.ghost:hover { border-color: var(--btc); background: var(--btc-bg); }
+    .btn[disabled] { opacity: .5; cursor: not-allowed; }
+    .btn input { display: none; }
+    .options { padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; background: var(--card2); }
+    .options label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; font-weight: 600; }
+    select { font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line2); border-radius: 9px; background: var(--card); color: var(--fg); }
+    .samples { grid-column: 1 / -1; border-top: 1px solid var(--line); padding: 16px 22px; }
+    .samples .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-top: 8px; }
+    .sample { all: unset; box-sizing: border-box; cursor: pointer; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px;
+              background: var(--card); display: flex; flex-direction: column; gap: 4px; transition: border-color .15s; }
+    .sample:hover, .sample:focus-visible { border-color: var(--btc); }
+    .sample b { font-size: 14px; }
+    .sample span { font-size: 12.5px; color: var(--muted); }
+    .sample em { font-style: normal; font-size: 11.5px; color: var(--btc-strong); }
+    .input-error { margin: 12px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--bad-bg); color: var(--bad); font-size: 14px; }
+
+    /* result */
+    .verdict { padding: 18px 20px; display: flex; gap: 14px; align-items: flex-start; margin-top: 12px; }
+    .verdict .vi { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 18px;
+                   font-weight: 700; background: var(--bg2); color: var(--muted); }
+    .verdict .vt { padding-top: 5px; overflow-wrap: anywhere; }
+    .verdict .vt b { display: block; font: 600 19px/1.3 var(--serif); }
+    .verdict .vt .sub { color: var(--muted); font-size: 14px; }
+    .verdict.ok { border-color: var(--ok); background: var(--ok-bg); }
+    .verdict.ok .vi { background: var(--ok); color: #06140e; }
+    .verdict.bad { border-color: var(--bad); background: var(--bad-bg); }
+    .verdict.bad .vi { background: var(--bad); color: #1d0705; }
+    .verdict.wait .vi { border: 3px solid var(--line2); border-top-color: var(--btc); background: none; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+    .panel { padding: 16px 18px; min-width: 0; }
+    ul.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; font-size: 14px; }
+    ul.checks li { display: grid; grid-template-columns: 20px 1fr; gap: 8px; }
+    ul.checks .ck { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+                    background: var(--ok); color: #06140e; margin-top: 1px; }
+    ul.checks li.bad .ck { background: var(--bad); color: #1d0705; }
+    ul.checks li.warn .ck { background: var(--warn); color: #1d1604; }
+    ul.checks li span.t { overflow-wrap: anywhere; }
+    ul.checks li span.t small { display: block; color: var(--muted); font-size: 12.5px; }
+    #steps { display: flex; flex-direction: column; }
+    .step { border-left: 2px solid var(--line); margin-left: 9px; }
+    .step:last-child { border-left-color: transparent; }
+    .step summary { list-style: none; padding: 3px 0 9px; cursor: pointer; display: flex; gap: 10px; align-items: center; margin-left: -11px; font-size: 13.5px; }
+    .step summary::-webkit-details-marker { display: none; }
+    .step .si { width: 20px; height: 20px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+                background: var(--card); border: 2px solid var(--line2); color: var(--muted); }
+    .step.running .si { border-top-color: var(--btc); animation: spin 1s linear infinite; }
+    .step.ok .si { background: #b8691a; border-color: #b8691a; color: #fff; }
+    .step.bad .si { background: var(--bad); border-color: var(--bad); color: #1d0705; }
+    .step.pending summary, .step.skipped summary { color: var(--muted); cursor: default; }
+    .step summary .rc { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .step summary .rc.bad { color: var(--bad); }
+    .step pre { margin: -4px 0 12px 20px; padding: 10px 12px; background: var(--term-bg); color: var(--term-fg); border-radius: 8px;
+                white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font-size: 11.5px; }
+    .step pre:empty { display: none; }
+
+    /* the transaction */
+    .tx { margin-top: 12px; padding: 18px 20px; }
+    .lockbanner { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 12px; margin-bottom: 14px; font-size: 14px;
+                  background: var(--warn-bg); border: 1px solid rgba(245, 196, 81, .35); }
+    .lockbanner.now { background: var(--ok-bg); border-color: rgba(69, 207, 150, .35); }
+    .lockbanner svg { width: 22px; height: 22px; flex: none; color: var(--warn); }
+    .lockbanner.now svg { color: var(--ok); }
+    dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 14px; font-size: 14px; }
+    dl.kv dt { color: var(--muted); }
+    dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+    table.outs { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; }
+    table.outs th { text-align: left; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600;
+                    padding: 6px 10px; border-bottom: 1px solid var(--line); }
+    table.outs td { padding: 6px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    table.outs td.amt { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .hexbox { position: relative; }
+    .hexbox pre { margin: 0; padding: 12px 14px; background: var(--term-bg); border: 1px solid var(--line); border-radius: 10px; color: var(--btc-strong);
+                  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+    details.console { margin-top: 32px; }
+    details.console summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+    #serial { background: var(--term-bg); color: var(--term-fg); padding: 12px; border-radius: 10px; height: 320px; overflow: auto;
+              white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; font-size: 12px; }
+    footer { color: var(--muted); font-size: 12.5px; margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--fg); color: var(--bg);
+             padding: 8px 16px; border-radius: 9px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+    .toast.show { opacity: 1; }
+    @media (max-width: 760px) {
+        .input, .grid2 { grid-template-columns: 1fr; }
+        .paste { border-right: 0; border-bottom: 1px solid var(--line); }
+        .stage-label .ic { display: none; }
+        .stage-label b { font-size: 11.5px; }
+        .stage-time { margin-left: 0; }
+        header { padding-top: 28px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+    <header>
+        <a class="back" href="../index.html">&larr; wasm-bitcoin-tools</a>
+        <svg class="mark" viewBox="0 0 64 64" role="img" aria-label="Bitcoin"><path fill="#f7931a" d="M63.04 39.741c-4.274 17.143-21.638 27.575-38.783 23.301C7.12 58.768-3.313 41.404.962 24.262 5.234 7.117 22.597-3.317 39.737.957c17.144 4.274 27.576 21.64 23.302 38.784z"/><path fill="#fff" d="M46.11 27.441c.636-4.258-2.606-6.547-7.039-8.074l1.438-5.768-3.512-.875-1.4 5.616c-.922-.23-1.87-.447-2.812-.662l1.41-5.653-3.509-.875-1.439 5.766c-.764-.174-1.514-.346-2.242-.527l.004-.018-4.842-1.209-.934 3.75s2.605.597 2.55.634c1.422.355 1.68 1.296 1.636 2.042l-1.638 6.571c.098.025.225.061.365.117l-.37-.092-2.297 9.205c-.174.432-.615 1.08-1.609.834.035.051-2.552-.637-2.552-.637l-1.743 4.019 4.57 1.139c.85.213 1.683.436 2.502.646l-1.453 5.835 3.507.875 1.439-5.772c.958.26 1.888.5 2.798.726l-1.434 5.745 3.511.875 1.453-5.823c5.987 1.133 10.489.676 12.384-4.739 1.527-4.36-.076-6.875-3.226-8.515 2.294-.529 4.022-2.038 4.483-5.155zM38.087 38.69c-1.085 4.36-8.426 2.003-10.806 1.412l1.928-7.729c2.38.594 10.012 1.77 8.878 6.317zm1.086-11.312c-.99 3.966-7.1 1.951-9.082 1.457l1.748-7.01c1.982.494 8.365 1.416 7.334 5.553z"/></svg>
+        <h1>Finalize a PSBT with <em>Bitcoin&nbsp;Core</em>.</h1>
+        <p class="lead">Paste or drop partially signed transactions. An unmodified Bitcoin Core <span id="btc_version">…</span>, offline in a
+        Linux machine emulated in this tab, combines them, checks what is still missing and finalizes them into a transaction you can
+        broadcast from anywhere. No wallet, no private keys, nothing uploaded.</p>
+        <div class="facts"><span>combinepsbt</span><span>descriptorprocesspsbt</span><span>analyzepsbt</span><span>finalizepsbt</span><span>No network device</span></div>
+        <div class="why"><b>Timelocks finalize at block 0.</b> The node here never syncs, and it doesn't need to: Bitcoin Core checks a script's
+        <code>after()</code> and <code>older()</code> against the transaction's own <code>nLockTime</code> and <code>nSequence</code>, which every
+        signature commits to, not against the chain. The chain only decides when the result can be broadcast, and the page tells you when that is.</div>
+    </header>
+
+    <section id="machine" class="tracker card" aria-live="polite">
+        <div class="top"><span class="headline" id="m_headline">Starting the machine…</span><span class="clock" id="m_clock">0:00</span></div>
+        <div class="detail" id="m_detail"></div>
+        <ol class="stages" id="m_stages"></ol>
+        <div class="foot"><span id="m_btc">Bitcoin Core: waiting</span><span id="m_spec"></span></div>
+    </section>
+
+    <h2><span class="n">Step 1</span> Your PSBTs</h2>
+    <div class="input card">
+        <div class="paste" id="drop">
+            <label class="t" for="psbt_text">PSBTs, base64, one per line</label>
+            <textarea id="psbt_text" spellcheck="false" placeholder="cHNidP8BAH0CAAAAA…&#10;cHNidP8BAH0CAAAAA…   (one from each signer: they are combined)"></textarea>
+            <div class="row">
+                <button type="button" class="btn" id="go">Finalize</button>
+                <label class="btn ghost">Add .psbt files<input type="file" id="file" multiple accept=".psbt,.txt,application/octet-stream"></label>
+                <small>or drop files here (binary or base64)</small>
+            </div>
+        </div>
+        <div class="options">
+            <label>Network <span style="font-weight:normal;color:var(--muted);font-size:12.5px">Only changes how addresses are shown. Auto reads the key paths in the PSBT.</span>
+                <select id="chain">
+                    <option value="auto">Auto-detect</option>
+                    <option value="main">mainnet</option>
+                    <option value="signet">signet</option>
+                    <option value="testnet4">testnet4</option>
+                    <option value="testnet">testnet3</option>
+                    <option value="regtest">regtest</option>
+                </select>
+            </label>
+            <label for="desc_text">Descriptors <span style="font-weight:normal;color:var(--muted);font-size:12.5px">Optional, public only. When a PSBT lacks its scripts, bitcoind fills them in from these (descriptorprocesspsbt).</span>
+                <textarea id="desc_text" spellcheck="false" placeholder="wsh(multi(2,[fp/48h/0h/0h/2h]xpub…/0/*,…))#checksum"></textarea>
+            </label>
+        </div>
+        <div class="samples">
+            <h3>Or try a sample</h3>
+            <div class="grid" id="samples"></div>
+        </div>
+    </div>
+    <div class="input-error" id="input_error" hidden></div>
+
+    <section id="result" hidden>
+        <h2><span class="n">Step 2</span> Bitcoin Core's result</h2>
+        <div class="tracker card" id="run">
+            <div class="top"><span class="headline" id="r_headline">Waiting for the machine…</span><span class="clock" id="r_clock">0:00</span></div>
+            <div class="detail" id="r_detail"></div>
+            <ol class="stages" id="r_stages"></ol>
+        </div>
+        <div id="verdict" class="verdict card wait"></div>
+        <div class="tx card" id="tx" hidden></div>
+        <div class="grid2">
+            <div class="panel card"><h3>What bitcoind found</h3><ul class="checks" id="checks"></ul></div>
+            <div class="panel card"><h3>Commands in the guest</h3><div id="steps"></div></div>
+        </div>
+    </section>
+
+    <details class="console">
+        <summary>Serial console (raw guest output)</summary>
+        <pre id="serial"></pre>
+    </details>
+    <footer id="footer"></footer>
+    <div class="toast" id="toast" role="status"></div>
+</main>
+
+<script>
+"use strict";
+
+const ALPINE_ISO = "../images/alpine-virt-3.19.9-x86_64.iso";
+const ALPINE_BOOT = "../images/alpine-virt-3.19.9-x86_64/boot/";
+const BITCOIN_DIR = "../images/bitcoin/";
+const MEMORY_MB = 1024;
+
+// The guest side (busybox sh), written to the share as /psbt.sh and run as
+//   sh /mnt/psbt.sh <chain> <job>
+// The page puts <job>.psbts (base64, one per line), <job>.combine.json (the combinepsbt
+// argument) and, if any, <job>.descs.json (descriptorprocesspsbt's) in the share; bitcoind's
+// answers come back as <job>.*.json files. Steps are framed on the serial console as
+// @@STEP name@@ … @@END name rc@@.
+const GUEST_SCRIPT = String.raw`#!/bin/sh
+M=/mnt
+D=/tmp/btc
+CHAIN=$1; J=$M/$2
+LD="$M/ld-linux-x86-64.so.2 --library-path $M"
+CLI="$LD $M/bitcoin-cli -datadir=$D -chain=$CHAIN"
+alive() { grep -qs '^State:[[:space:]]*[RSDT]' /proc/$1/status; }
+step() { echo "@@STEP $1@@"; }
+end() { echo "@@END $1 $2@@"; }
+fail() { sync; echo "@@DONE $1@@"; exit $1; }
+
+step node
+if [ -s $D/chain ] && [ "$(cat $D/chain)" != "$CHAIN" ]; then
+    echo "stopping bitcoind ($(cat $D/chain))"
+    $LD $M/bitcoin-cli -datadir=$D -chain=$(cat $D/chain) stop >/dev/null 2>&1
+    while alive $(cat $D/pid 2>/dev/null || echo none); do sleep 1; done
+    rm -f $D/chain
+fi
+if $CLI getblockchaininfo >/dev/null 2>&1; then
+    echo "bitcoind is already running on $CHAIN"
+else
+    ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null
+    mkdir -p $D
+    $LD $M/bitcoind -datadir=$D -chain=$CHAIN -disablewallet \
+        -networkactive=0 -connect=0 -listen=0 -dnsseed=0 -listenonion=0 \
+        -dbcache=16 -maxmempool=5 -par=1 -server=1 -printtoconsole=0 >$D/bitcoind.out 2>&1 &
+    echo $! > $D/pid
+    echo "$CHAIN" > $D/chain
+    echo "bitcoind started on $CHAIN (pid $!, no wallet), waiting for rpc"
+    i=0
+    until $CLI getblockchaininfo >/dev/null 2>&1; do
+        i=$((i + 1))
+        if ! alive $(cat $D/pid) || [ $i -gt 300 ]; then
+            alive $(cat $D/pid) && echo "no rpc after $i attempts" || echo "bitcoind exited"
+            cat $D/bitcoind.out
+            end node 1
+            fail 1
+        fi
+        sleep 1
+    done
+    echo "rpc is up after $i s"
+fi
+echo "height $($CLI getblockcount)"
+end node 0
+
+step network
+$CLI getnetworkinfo 2>&1
+end network $?
+
+step decode
+rc=0; n=0
+while read -r p; do
+    [ -n "$p" ] || continue
+    n=$((n + 1))
+    if echo "$p" | $CLI -stdin decodepsbt > $D/dec 2>&1; then
+        echo "PSBT $n: valid"
+    else
+        echo "PSBT $n: $(cat $D/dec)"
+        rc=1
+    fi
+done < $J.psbts
+end decode $rc
+[ $rc = 0 ] || fail $rc
+
+step combine
+if [ $n -gt 1 ]; then
+    $CLI -stdin combinepsbt < $J.combine.json > $D/cur 2>&1
+    rc=$?
+    [ $rc = 0 ] && echo "combined $n PSBTs" || cat $D/cur
+else
+    grep -m1 . $J.psbts > $D/cur
+    rc=0
+    echo "one PSBT: nothing to combine"
+fi
+end combine $rc
+[ $rc = 0 ] || fail $rc
+
+if [ -s $J.descs.json ]; then
+    step update
+    { cat $D/cur; cat $J.descs.json; } | $CLI -stdin descriptorprocesspsbt > $D/upd 2>&1
+    rc=$?
+    if [ $rc = 0 ]; then
+        grep '"psbt"' $D/upd | cut -d'"' -f4 > $D/cur
+        echo "scripts and key paths filled in from $(grep -c . $J.descs.lines) descriptor(s)"
+    else
+        cat $D/upd
+    fi
+    end update $rc
+    [ $rc = 0 ] || fail $rc
+fi
+
+step analyze
+$CLI -stdin decodepsbt < $D/cur > $J.decoded.json 2>&1
+$CLI -stdin analyzepsbt < $D/cur > $J.analysis.json 2>&1
+rc=$?
+cat $J.analysis.json
+end analyze $rc
+[ $rc = 0 ] || fail $rc
+
+step finalize
+$CLI -stdin finalizepsbt < $D/cur > $J.final.json 2>&1
+rc=$?
+{ cat $D/cur; echo false; } | $CLI -stdin finalizepsbt > $J.finalpsbt.json 2>&1
+if [ $rc = 0 ] && grep -q '"complete": true' $J.final.json; then
+    hex=$(grep '"hex"' $J.final.json | cut -d'"' -f4)
+    echo "$hex" | $CLI -stdin decoderawtransaction > $J.tx.json 2>&1
+    echo "complete: txid $(grep -m1 '"txid"' $J.tx.json | cut -d'"' -f4)"
+    echo "$(grep -m1 '"vsize"' $J.tx.json | tr -d ' ,') bytes"
+else
+    [ $rc = 0 ] && rc=3
+    echo "not complete: bitcoind cannot build the final scripts yet"
+    head -c 300 $J.final.json
+    echo
+fi
+sync
+end finalize $rc
+echo "@@DONE $rc@@"
+`;
+
+// --- reading PSBTs in the page ------------------------------------------------------------------------
+
+// Base64 PSBTs from text: one per line or whitespace-separated, and data: or "psbt:" prefixes dropped.
+function psbts_from_text(text)
+{
+    return text.split(/\s+/).map(s => s.replace(/^(psbt:|data:[^,]*,)/, "")).filter(s => s.length > 20);
+}
+
+function bytes_to_base64(bytes)
+{
+    let s = "";
+    for(let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+}
+
+function base64_to_bytes(b64)
+{
+    const s = atob(b64);
+    const out = new Uint8Array(s.length);
+    for(let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+}
+
+// The BIP32 derivation paths in a PSBT's inputs and outputs (key type 0x06 / 0x02), for guessing the network.
+function psbt_paths(bytes)
+{
+    if(bytes[0] !== 0x70 || bytes[1] !== 0x73 || bytes[2] !== 0x62 || bytes[3] !== 0x74 || bytes[4] !== 0xff) throw new Error("not a PSBT");
+    let i = 5;
+    const varint = () =>
+    {
+        const b = bytes[i++];
+        if(b < 0xfd) return b;
+        const n = b === 0xfd ? 2 : b === 0xfe ? 4 : 8;
+        let v = 0;
+        for(let k = 0; k < n; k++) v += bytes[i++] * 2 ** (8 * k);
+        return v;
+    };
+    const paths = [];
+    let map = 0;
+    while(i < bytes.length)
+    {
+        const kl = varint();
+        if(kl === 0) { map++; continue; }
+        const type = bytes[i];
+        i += kl;
+        const vl = varint();
+        if(map > 0 && (type === 0x06 || type === 0x02) && vl >= 8)
+        {
+            const path = [];
+            for(let k = i + 4; k + 4 <= i + vl; k += 4) path.push((bytes[k] | bytes[k + 1] << 8 | bytes[k + 2] << 16 | bytes[k + 3] << 24) >>> 0);
+            paths.push(path);
+        }
+        i += vl;
+        if(i > bytes.length) throw new Error("truncated PSBT");
+    }
+    return paths;
+}
+
+// Test keys sit under coin type 1' (BIP44/48/49/84/86), and descriptors give tpub (test) or xpub (main) keys.
+// Signet's addresses are every test network's tb1.
+function guess_chain(psbts, descs)
+{
+    const keys = descs.join(" ");
+    if(/[tuvUV]pub[1-9A-HJ-NP-Za-km-z]{20}/.test(keys)) return "signet";
+    if(/[xyzYZ]pub[1-9A-HJ-NP-Za-km-z]{20}/.test(keys)) return "main";
+    for(const p of psbts)
+    {
+        for(const path of psbt_paths(base64_to_bytes(p)))
+        {
+            if(path.length >= 2 && path[1] === 0x80000001) return "signet";
+            if(path.length >= 2 && path[1] === 0x80000000) return "main";
+        }
+    }
+    return "main";
+}
+
+// The timelocks in an input's scripts: "<n> OP_CHECKLOCKTIMEVERIFY" / "<n> OP_CHECKSEQUENCEVERIFY" in the asm.
+function script_locks(input)
+{
+    const asm = [input.witness_script, input.redeem_script].filter(Boolean).map(s => s.asm).join(" ");
+    const grab = op => [...asm.matchAll(new RegExp("(\\d+) " + op, "g"))].map(m => +m[1]);
+    return { cltv: grab("OP_CHECKLOCKTIMEVERIFY"), csv: grab("OP_CHECKSEQUENCEVERIFY") };
+}
+
+const LOCKTIME_THRESHOLD = 500000000;
+const fmt_lock = v => v >= LOCKTIME_THRESHOLD ? new Date(v * 1000).toUTCString().replace(/ GMT$/, " UTC") : "block " + v.toLocaleString("en-US");
+
+// What the transaction's own fields allow, against what its scripts ask for.
+function timelock_report(decoded)
+{
+    const tx = decoded.tx, lt = tx.locktime;
+    const final_seq = tx.vin.every(v => v.sequence === 0xffffffff);
+    const items = [];
+    decoded.inputs.forEach((input, n) =>
+    {
+        const { cltv, csv } = script_locks(input);
+        for(const need of cltv)
+        {
+            const same_kind = (need >= LOCKTIME_THRESHOLD) === (lt >= LOCKTIME_THRESHOLD);
+            const ok = same_kind && lt >= need && tx.vin[n].sequence !== 0xffffffff;
+            items.push({ n, kind: "after", need, ok,
+                why: ok ? "the transaction's nLockTime (" + fmt_lock(lt) + ") reaches it" :
+                    lt === 0 ? "the transaction's nLockTime is 0, so this path can't be satisfied without rebuilding and re-signing the PSBT" :
+                    !same_kind ? "nLockTime is a " + (lt >= LOCKTIME_THRESHOLD ? "time" : "height") + ", the script wants a " + (need >= LOCKTIME_THRESHOLD ? "time" : "height") :
+                    tx.vin[n].sequence === 0xffffffff ? "the input's nSequence is final (0xffffffff), which disables nLockTime" :
+                    "nLockTime is " + (lt ? fmt_lock(lt) : "0") + ": this path can't be satisfied without rebuilding and re-signing the PSBT" });
+        }
+        for(const need of csv)
+        {
+            const seq = tx.vin[n].sequence;
+            const ok = tx.version >= 2 && !(seq & 0x80000000) && (seq & 0x400000) === (need & 0x400000) && (seq & 0xffff) >= (need & 0xffff);
+            items.push({ n, kind: "older", need, ok, why: ok ? "the input's nSequence (" + seq + ") reaches it" : "the input's nSequence (" + seq + ") doesn't reach it" });
+        }
+    });
+    let broadcast;
+    if(!lt || final_seq) broadcast = { now: true, text: "No locktime in force: it can be broadcast as soon as its inputs exist." };
+    else if(lt >= LOCKTIME_THRESHOLD)
+    {
+        const future = lt * 1000 > Date.now();
+        broadcast = { now: !future, text: (future ? "Not before " : "Since ") + fmt_lock(lt) +
+            ": the network relays it once the chain's median time passes nLockTime" + (future ? " (about an hour after that time)." : ".") };
+    }
+    else broadcast = { now: false, text: "Not before block " + (lt + 1).toLocaleString("en-US") + " (nLockTime " + lt.toLocaleString("en-US") + ")." };
+    return { items, broadcast, locktime: lt };
+}
+
+// --- page plumbing ------------------------------------------------------------------------------------
+
+const $ = id => document.getElementById(id);
+const fmt_bytes = n => n < 1024 * 1024 ? (n / 1024).toFixed(1) + " KiB" : (n / 1024 / 1024).toFixed(1) + " MiB";
+const fmt_clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+const fmt_btc = v => (+v).toFixed(8).replace(/0{1,5}$/, "") + " BTC";
+const CHAIN_NAMES = { main: "mainnet", signet: "signet", testnet4: "testnet4", testnet: "testnet3", regtest: "regtest" };
+
+function el(tag, attrs, ...children)
+{
+    const e = document.createElement(tag);
+    for(const [k, v] of Object.entries(attrs || {}))
+    {
+        if(k === "class") e.className = v;
+        else if(k.startsWith("on")) e.addEventListener(k.slice(2), v);
+        else e.setAttribute(k, v);
+    }
+    for(const c of children) if(c !== null && c !== undefined && c !== false) e.append(c);
+    return e;
+}
+
+function svg(paths)
+{
+    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    for(const [k, v] of Object.entries({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2.4",
+                                         "stroke-linecap": "round", "stroke-linejoin": "round" })) s.setAttribute(k, v);
+    s.innerHTML = paths;
+    return s;
+}
+const ICON = {
+    fetch: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+    chip: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+    linux: '<path d="M4 17l6-6-6-6M12 19h8"/>',
+    btc: '<path d="M8 5h6a3.5 3.5 0 0 1 0 7H8zm0 7h7a3.5 3.5 0 0 1 0 7H8zM8 5v14"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    node: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    merge: '<path d="M6 3v6a6 6 0 0 0 6 6h6M18 9l3 3-3 3M6 21v-6"/>',
+    fill: '<path d="M4 4h16v16H4zM8 12h8M12 8v8"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+    seal: '<path d="M12 2 3 6v6c0 5 3.8 9.3 9 10 5.2-.7 9-5 9-10V6z"/><path d="m9 12 2 2 4-4"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+};
+
+function make_tracker(prefix, stages)
+{
+    const list = $(prefix + "_stages");
+    list.style.setProperty("--n", stages.length);
+    list.textContent = "";
+    const t = { stages, index: -1, started: 0, ended: 0, times: [], failed: false, skipped: new Set() };
+    for(const s of stages)
+    {
+        s.fraction = 0;
+        s.li = el("li", {}, el("div", { class: "seg" }, el("i")),
+            el("div", { class: "stage-label" }, el("span", { class: "ic" }, svg(ICON[s.icon])), el("b", {}, s.label)),
+            el("span", { class: "stage-time" }));
+        list.append(s.li);
+    }
+    t.render = () =>
+    {
+        stages.forEach((s, i) =>
+        {
+            s.li.className = t.skipped.has(s.key) ? "skip" : t.failed && i === t.index ? "fail" :
+                i < t.index || (i === t.index && t.ended) ? "done" : i === t.index ? "now" : "";
+            const fill = s.li.querySelector(".seg i");
+            fill.style.width = i === t.index && !t.ended && !t.failed ? Math.round(s.fraction * 100) + "%" : "";
+            const time = s.li.querySelector(".stage-time");
+            if(t.skipped.has(s.key)) time.textContent = "not needed";
+            else if(t.times[i] !== undefined)
+            {
+                const next = t.times.slice(i + 1).find(x => x !== undefined);
+                time.textContent = fmt_clock((next !== undefined ? next : t.ended || Date.now()) - t.times[i]);
+            }
+            else time.textContent = "";
+        });
+        if(t.started) $(prefix + "_clock").textContent = fmt_clock((t.ended || Date.now()) - t.started);
+    };
+    t.go = (key, fraction) =>
+    {
+        const i = stages.findIndex(s => s.key === key);
+        if(i < 0 || t.ended) return;
+        if(!t.started) t.started = Date.now();
+        if(i > t.index)
+        {
+            for(let j = t.index + 1; j < i; j++) if(t.times[j] === undefined && !t.times.slice(j).some(x => x !== undefined)) t.skipped.add(stages[j].key);
+            t.index = i;
+            t.times[i] = Date.now();
+        }
+        if(i === t.index && fraction !== undefined) stages[i].fraction = Math.max(stages[i].fraction, Math.min(1, fraction));
+        t.render();
+    };
+    t.finish = () => { for(let j = t.index + 1; j < stages.length; j++) t.skipped.add(stages[j].key); t.ended = Date.now(); t.render(); };
+    t.fail = () => { t.failed = true; t.ended = Date.now(); t.render(); };
+    t.render();
+    return t;
+}
+
+function headline(prefix, text, detail, state)
+{
+    $(prefix + "_headline").textContent = text;
+    if(detail !== undefined) $(prefix + "_detail").textContent = detail;
+    const box = prefix === "m" ? $("machine") : $("run");
+    box.classList.toggle("ready", state === "ready");
+    box.classList.toggle("failed", state === "bad");
+}
+
+const boot = make_tracker("m", [
+    { key: "fetch", label: "Download", icon: "fetch" },
+    { key: "kernel", label: "Linux kernel", icon: "chip" },
+    { key: "alpine", label: "Alpine Linux", icon: "linux" },
+    { key: "core", label: "Bitcoin Core", icon: "btc" },
+    { key: "ready", label: "Ready", icon: "check" },
+]);
+const RUN_STAGES = [
+    { key: "node", label: "Node", icon: "node", steps: ["node", "network"] },
+    { key: "decode", label: "Decode", icon: "eye", steps: ["decode"] },
+    { key: "combine", label: "Combine", icon: "merge", steps: ["combine"] },
+    { key: "update", label: "Update", icon: "fill", steps: ["update"] },
+    { key: "analyze", label: "Analyze", icon: "search", steps: ["analyze"] },
+    { key: "finalize", label: "Finalize", icon: "seal", steps: ["finalize"] },
+];
+const STEP_TITLES = {
+    node: "Start bitcoind, offline, at block 0",
+    network: "Network is off (getnetworkinfo)",
+    decode: "Decode each PSBT (decodepsbt)",
+    combine: "Combine signatures (combinepsbt)",
+    update: "Fill in scripts (descriptorprocesspsbt)",
+    analyze: "Analyze (analyzepsbt)",
+    finalize: "Finalize (finalizepsbt)",
+};
+let run_tracker = null;
+setInterval(() => { if(!boot.ended) boot.render(); if(current && run_tracker && !run_tracker.ended) run_tracker.render(); }, 500);
+
+// --- the machine ---------------------------------------------------------------------------------------
+
+let emulator, manifest, binaries;
+let serial_text = "";
+let guest_state = "boot";      // boot | login | mount | ready | busy | dead
+let job_count = 0;
+let current = null;
+const queue = [];
+
+let serial_log = "", serial_render_pending = false;
+function log_serial(text)
+{
+    serial_log += text;
+    if(serial_log.length > 300000) serial_log = serial_log.slice(-200000);
+    if(serial_render_pending) return;
+    serial_render_pending = true;
+    requestAnimationFrame(() =>
+    {
+        serial_render_pending = false;
+        $("serial").textContent = serial_log.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b[78]|\r/g, "");
+        $("serial").scrollTop = $("serial").scrollHeight;
+    });
+}
+
+async function sha256_hex(data)
+{
+    if(!crypto.subtle) return null;
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function load_binaries()
+{
+    const r = await fetch(BITCOIN_DIR + "manifest.json");
+    if(!r.ok) throw new Error("images/bitcoin/manifest.json is missing: run ./scripts/setup.sh");
+    manifest = await r.json();
+    $("btc_version").textContent = manifest.bitcoin_core;
+    $("footer").textContent = "Guest: Alpine Linux 3.19 (virt), " + MEMORY_MB + " MiB, no network device. Bitcoin Core " +
+        manifest.bitcoin_core + " from " + manifest.tarball + " (sha256 " + manifest.tarball_sha256.slice(0, 16) + "…), run through " +
+        manifest.glibc + ", with -disablewallet: the node holds no keys.";
+    const total = manifest.files.reduce((n, f) => n + f.size, 0);
+    let loaded = 0;
+    for(const f of manifest.files)
+    {
+        const res = await fetch(BITCOIN_DIR + f.name);
+        if(!res.ok) throw new Error("cannot fetch " + BITCOIN_DIR + f.name + " (" + res.status + ")");
+        const data = new Uint8Array(await res.arrayBuffer());
+        const hash = await sha256_hex(data);
+        if(hash && hash !== f.sha256) throw new Error(f.name + " does not match the manifest's sha256");
+        await emulator.create_file("/" + f.name, data);
+        loaded += data.length;
+        $("m_btc").textContent = "Bitcoin Core " + manifest.bitcoin_core + ": " + fmt_bytes(loaded) + " of " + fmt_bytes(total);
+        if(boot.index === 0) boot.go("fetch", 0.3 + 0.7 * loaded / total);
+    }
+    await emulator.create_file("/psbt.sh", new TextEncoder().encode(GUEST_SCRIPT));
+    $("m_btc").textContent = "";
+    $("m_btc").append(el("span", { class: "ok" }, "✓"), " Bitcoin Core " + manifest.bitcoin_core + ", " + fmt_bytes(total) +
+        (crypto.subtle ? ", sha256 verified" : " (sha256 not checked: not a secure context)"));
+    return manifest;
+}
+
+function start_machine()
+{
+    $("m_spec").textContent = "x86-64 · " + MEMORY_MB + " MiB · Alpine Linux 3.19 · no network";
+    emulator = new V86({
+        wasm_path: "../v86_64/build/v86.wasm",
+        memory_size: MEMORY_MB * 1024 * 1024,
+        vga_memory_size: 8 * 1024 * 1024,
+        bios: { url: "../v86_64/bios/seabios.bin" },
+        vga_bios: { url: "../v86_64/bios/vgabios.bin" },
+        cdrom: { url: ALPINE_ISO, async: true },
+        bzimage: { url: ALPINE_BOOT + "vmlinuz-virt" },
+        initrd: { url: ALPINE_BOOT + "initramfs-virt" },
+        cmdline: "console=tty0 console=ttyS0,115200 modules=loop,squashfs,sd-mod,usb-storage quiet",
+        filesystem: {},
+        net_device: { type: "none" },
+        autostart: true,
+        disable_keyboard: true,
+        disable_mouse: true,
+    });
+    window.emulator = emulator;
+    boot.go("fetch", 0);
+    headline("m", "Downloading the machine…", "BIOS, Linux kernel and initramfs");
+    const fetched = {};
+    emulator.add_listener("download-progress", e =>
+    {
+        fetched[e.file_index] = e.total ? e.loaded / e.total : 0;
+        boot.go("fetch", Object.values(fetched).reduce((a, b) => a + b, 0) / (e.file_count || 1) * 0.9);
+        $("m_detail").textContent = String(e.file_name).split("/").pop() + (e.total ? " · " + fmt_bytes(e.loaded) + " of " + fmt_bytes(e.total) : "");
+    });
+    emulator.add_listener("download-error", e =>
+    {
+        boot.fail();
+        headline("m", "The machine could not be downloaded", "Loading " + e.file_name + " failed. Reload the page to try again.", "bad");
+        guest_state = "dead";
+    });
+    emulator.add_listener("emulator-started", () =>
+    {
+        boot.go("kernel", 0.05);
+        headline("m", "Booting the Linux kernel…", "SeaBIOS hands over to Linux");
+    });
+    const decoder = new TextDecoder();
+    let line_buf = "";
+    emulator.add_listener("serial0-output-byte", byte =>
+    {
+        const chr = decoder.decode(new Uint8Array([byte]), { stream: true });
+        if(!chr) return;
+        log_serial(chr);
+        serial_text = (serial_text + chr).slice(-4096);
+        if(chr === "\n")
+        {
+            const line = line_buf.replace(/\r/g, "").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+            line_buf = "";
+            if(current) parse_line(line);
+            else if(guest_state === "boot") boot_line(line);
+        }
+        else line_buf += chr;
+        if(guest_state !== "ready" && guest_state !== "busy" && (chr === " " || chr === "@")) check_prompts();
+    });
+    binaries = load_binaries().catch(e =>
+    {
+        boot.fail();
+        headline("m", "Bitcoin Core could not be loaded", e.message, "bad");
+        guest_state = "dead";
+        throw e;
+    });
+    binaries.catch(() => {});
+}
+
+const BOOT_CUES = [
+    [/Alpine Init|Loading boot drivers/, 0.1, "Alpine's initramfs is loading the boot drivers"],
+    [/Mounting boot media/, 0.25, "Mounting the boot media (the ISO)"],
+    [/Installing packages to root/, 0.4, "Installing the live system's packages"],
+    [/OpenRC .* is starting up/, 0.6, "OpenRC is starting the services"],
+    [/syslog/, 0.75, "Starting the services"],
+    [/Welcome to Alpine/, 0.95, "Waiting for the login prompt"],
+];
+function boot_line(line)
+{
+    for(const [re, fraction, detail] of BOOT_CUES)
+    {
+        if(!re.test(line)) continue;
+        if(boot.index < 2) headline("m", "Starting Alpine Linux…");
+        boot.go("alpine", fraction);
+        $("m_detail").textContent = detail;
+    }
+}
+
+function check_prompts()
+{
+    const tail = serial_text.replace(/\r/g, "");
+    if(guest_state === "boot" && /login: $/.test(tail))
+    {
+        guest_state = "login";
+        boot.go("core", 0.1);
+        headline("m", "Logging in and mounting the shared folder…", "root on the serial console");
+        emulator.serial0_send("root\n");
+    }
+    else if(guest_state === "login" && /:~# $/.test(tail))
+    {
+        guest_state = "mount";
+        boot.go("core", 0.35);
+        $("m_detail").textContent = manifest ? "Mounting the 9p share that carries Bitcoin Core and your PSBTs" : "Waiting for the Bitcoin Core download to finish";
+        binaries.then(() =>
+        {
+            boot.go("core", 0.6);
+            emulator.serial0_send("modprobe 9pnet_virtio; modprobe 9p; " +
+                "mount -t 9p -o trans=virtio,version=9p2000.L,cache=loose host9p /mnt && " +
+                "chmod 755 /mnt/ld-linux-x86-64.so.2 /mnt/bitcoin* && echo @@MOU''NTED@@\n");
+        }, () => {});
+    }
+    else if(guest_state === "mount" && tail.includes("@@MOUNTED@@"))
+    {
+        serial_text = "";
+        guest_state = "ready";
+        boot.go("ready", 1);
+        boot.finish();
+        machine_idle();
+        run_next();
+    }
+}
+
+function machine_idle()
+{
+    headline("m", "Ready", (current || queue.length ? "Finalizing your PSBTs" : "Paste PSBTs or try a sample") +
+        " · booted in " + Math.round((boot.ended - boot.started) / 1000) + " s · bitcoind starts with the first run, offline", "ready");
+}
+
+// --- one run ---------------------------------------------------------------------------------------------
+
+function parse_line(line)
+{
+    let m;
+    if((m = /^@@STEP (\S+)@@$/.exec(line)))
+    {
+        current.step = { name: m[1], lines: [], started: Date.now() };
+        current.steps.push(current.step);
+        render_step(current.step);
+        const stage = RUN_STAGES.find(s => s.steps.includes(m[1]));
+        if(stage) run_tracker.go(stage.key, (stage.steps.indexOf(m[1]) + 0.5) / stage.steps.length);
+        headline("r", STEP_TITLES[m[1]] + "…", "");
+    }
+    else if((m = /^@@END (\S+) (\d+)@@$/.exec(line)))
+    {
+        if(current.step && current.step.name === m[1])
+        {
+            current.step.rc = +m[2];
+            finish_step(current.step);
+            current.step = null;
+        }
+    }
+    else if((m = /^@@DONE (\d+)@@$/.exec(line))) finish_run(+m[1]);
+    else if(current.step)
+    {
+        current.step.lines.push(line);
+        render_step(current.step);
+    }
+}
+
+const step_text = step => step.lines.join("\n").trim();
+function step_json(step)
+{
+    const text = step_text(step);
+    if(/^[\[{]/.test(text)) try { return JSON.parse(text); } catch(e) {}
+    return null;
+}
+
+function step_element(name)
+{
+    const e = el("details", { class: "step pending", "data-name": name },
+        el("summary", {}, el("span", { class: "si" }), el("span", { class: "title" }, STEP_TITLES[name]), el("span", { class: "rc" })), el("pre"));
+    e.querySelector("summary").addEventListener("click", ev => { if(/pending|skipped/.test(e.className)) ev.preventDefault(); });
+    $("steps").append(e);
+    return e;
+}
+
+function render_step(step)
+{
+    if(!step.el)
+    {
+        step.el = $("steps").querySelector(".step.pending[data-name='" + step.name + "']") || step_element(step.name);
+        step.el.className = "step running";
+        step.el.querySelector(".rc").textContent = "running…";
+    }
+    step.el.querySelector("pre").textContent = step.lines.join("\n");
+}
+
+function finish_step(step)
+{
+    render_step(step);
+    const rc = step.el.querySelector(".rc");
+    const not_complete = step.name === "finalize" && step.rc === 3;
+    rc.textContent = step.rc === 0 ? ((Date.now() - step.started) / 1000).toFixed(1) + " s" : not_complete ? "not complete" : "failed (exit " + step.rc + ")";
+    rc.className = "rc " + (step.rc === 0 ? "" : "bad");
+    step.el.className = "step " + (step.rc === 0 ? "ok" : "bad");
+    step.el.querySelector(".si").textContent = step.rc === 0 ? "✓" : "✕";
+    if(step.rc !== 0 && !not_complete) step.el.open = true;
+}
+
+async function read_json(name)
+{
+    try { return JSON.parse(new TextDecoder().decode(await emulator.read_file("/" + name))); }
+    catch(e) { return null; }
+}
+
+async function finish_run(rc)
+{
+    const job = current;
+    current = null;
+    guest_state = "ready";
+    for(const e of $("steps").querySelectorAll(".step.pending")) { e.className = "step skipped"; e.querySelector(".rc").textContent = "not needed"; }
+    const read = name => read_json(job.id + "." + name + ".json");
+    const [decoded, analysis, final, finalpsbt, tx] = await Promise.all(["decoded", "analysis", "final", "finalpsbt", "tx"].map(read));
+    show_result(job, rc, { decoded, analysis, final, finalpsbt, tx });
+    machine_idle();
+    run_next();
+}
+
+function add_check(state, title, detail)
+{
+    $("checks").append(el("li", { class: state === "ok" ? "" : state }, el("span", { class: "ck" }, state === "ok" ? "✓" : state === "warn" ? "!" : "✕"),
+        el("span", { class: "t" }, title, detail ? el("small", {}, detail) : null)));
+}
+
+function show_result(job, rc, r)
+{
+    const secs = Math.round((Date.now() - job.started) / 1000);
+    const by = Object.fromEntries(job.steps.map(s => [s.name, s]));
+    $("checks").textContent = "";
+    const net = by.network && step_json(by.network);
+    if(net) add_check(!net.networkactive ? "ok" : "bad", "Offline node at block 0", net.subversion + ", network disabled, no wallet loaded");
+    if(by.decode) add_check(by.decode.rc === 0 ? "ok" : "bad", by.decode.rc === 0 ? job.psbts.length + " PSBT" + (job.psbts.length > 1 ? "s" : "") + " decoded" : "A PSBT could not be decoded",
+        step_text(by.decode).split("\n").slice(0, 4).join(" · "));
+    if(by.combine && job.psbts.length > 1) add_check(by.combine.rc === 0 ? "ok" : "bad", by.combine.rc === 0 ? "Combined into one PSBT" : "The PSBTs could not be combined",
+        by.combine.rc === 0 ? "the signatures from every PSBT now sit in one" : step_text(by.combine).slice(0, 300));
+    if(by.update) add_check(by.update.rc === 0 ? "ok" : "bad", by.update.rc === 0 ? "Scripts filled in from your descriptors" : "The descriptors could not be applied", step_text(by.update).slice(0, 300));
+
+    if(r.analysis && r.analysis.inputs)
+    {
+        r.analysis.inputs.forEach((input, n) =>
+        {
+            const miss = input.missing || {};
+            const parts = [];
+            if(miss.signatures) parts.push("signatures from " + miss.signatures.length + " more key" + (miss.signatures.length > 1 ? "s" : "") + " (" + miss.signatures.join(", ").slice(0, 120) + ")");
+            if(miss.pubkeys) parts.push(miss.pubkeys.length + " public key" + (miss.pubkeys.length > 1 ? "s" : ""));
+            if(miss.redeemscript) parts.push("the redeem script");
+            if(miss.witnessscript) parts.push("the witness script (add descriptors)");
+            if(!input.has_utxo) parts.push("the coin being spent (the PSBT has no UTXO for it)");
+            const ready = input.is_final || input.next === "finalizer";
+            add_check(ready ? "ok" : parts.length ? "bad" : "warn", "Input " + n + ": " + (ready ? "every signature it needs" : "next step: " + input.next),
+                ready ? "signatures and scripts are all present" : parts.length ? "missing " + parts.join(", ") :
+                    "analyzepsbt reports nothing missing, yet no spending path can be completed (see the timelocks below)");
+        });
+        if(r.analysis.fee !== undefined) add_check("ok", "Fee " + fmt_btc(r.analysis.fee),
+            (r.analysis.estimated_feerate ? (r.analysis.estimated_feerate * 1e5).toFixed(2) + " sat/vB" : "") + (r.analysis.estimated_vsize ? " · about " + r.analysis.estimated_vsize + " vB" : ""));
+    }
+    const lock = r.decoded && r.decoded.tx ? timelock_report(r.decoded) : null;
+    if(lock) for(const item of lock.items)
+        add_check(item.ok ? "ok" : "bad", "Input " + item.n + ": " + item.kind + "(" + (item.kind === "after" ? fmt_lock(item.need) : item.need) + ")", item.why);
+
+    const complete = r.final && r.final.complete;
+    if(complete)
+    {
+        run_tracker.finish();
+        headline("r", "Finalized in " + secs + " s", "Bitcoin Core " + manifest.bitcoin_core + " on " + CHAIN_NAMES[job.chain] + ", offline, at block 0", "ready");
+        set_verdict("ok", "Finalized: the transaction is complete", lock && !lock.broadcast.now ?
+            "It is timelocked: the network will only accept it once its nLockTime has passed (below)." : "Copy it and broadcast it from any node or block explorer.");
+        render_tx(job, r, lock);
+    }
+    else
+    {
+        run_tracker.fail();
+        const failed = job.steps.find(s => s.rc && s.rc !== 3);
+        headline("r", failed ? "Stopped at: " + STEP_TITLES[failed.name] : "Not complete yet", "", "bad");
+        const lock_block = lock && lock.items.find(i => !i.ok);
+        set_verdict("bad", failed ? "Bitcoin Core could not process this PSBT" : "Not finalized: something is still missing",
+            failed ? step_text(failed).replace(/\s+/g, " ").slice(0, 400) :
+            lock_block ? "A timelocked path needs " + lock_block.kind + "(" + (lock_block.kind === "after" ? fmt_lock(lock_block.need) : lock_block.need) + "), but " + lock_block.why + "." :
+            "See below for what each input still needs. Collect the other signers' PSBTs and finalize them together.");
+        $("tx").hidden = true;
+        if(r.finalpsbt && r.finalpsbt.psbt && job.psbts.length > 1) render_partial(job, r);
+    }
+}
+
+function set_verdict(state, title, sub)
+{
+    const v = $("verdict");
+    v.className = "verdict card " + state;
+    v.textContent = "";
+    v.append(el("span", { class: "vi" }, { ok: "✓", bad: "✕", wait: "" }[state]), el("span", { class: "vt" }, el("b", {}, title), el("span", { class: "sub" }, sub || "")));
+}
+
+function render_tx(job, r, lock)
+{
+    const box = $("tx");
+    box.textContent = "";
+    const tx = r.tx;
+    if(lock) box.append(el("div", { class: "lockbanner" + (lock.broadcast.now ? " now" : "") }, svg(ICON.clock), el("span", {}, lock.broadcast.text)));
+    const kv = el("dl", { class: "kv" });
+    const add = (k, v, mono) => kv.append(el("dt", {}, k), el("dd", mono ? { class: "mono" } : {}, v));
+    if(tx)
+    {
+        add("txid", tx.txid, true);
+        if(tx.hash !== tx.txid) add("wtxid", tx.hash, true);
+        add("Size", tx.vsize + " vB · " + tx.weight + " WU · " + tx.size + " bytes");
+        add("Version, nLockTime", tx.version + ", " + (tx.locktime ? fmt_lock(tx.locktime) + " (" + tx.locktime + ")" : "0"));
+        add("Inputs", tx.vin.length + "");
+    }
+    box.append(kv);
+    if(tx)
+    {
+        const table = el("table", { class: "outs" }, el("thead", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Output"), el("th", { style: "text-align:right" }, "Amount"))));
+        const body = el("tbody");
+        for(const o of tx.vout)
+            body.append(el("tr", {}, el("td", {}, String(o.n)), el("td", { class: "mono" }, o.scriptPubKey.address || o.scriptPubKey.asm.slice(0, 80)), el("td", { class: "amt mono" }, fmt_btc(o.value))));
+        table.append(body);
+        box.append(table);
+    }
+    const hex = r.final.hex;
+    box.append(el("h3", {}, "Final transaction (hex)"), el("div", { class: "hexbox" }, el("pre", {}, hex)));
+    const name = (tx ? tx.txid.slice(0, 16) : "transaction");
+    box.append(el("div", { class: "actions" },
+        el("button", { type: "button", class: "btn", onclick: () => copy_text(hex, "the transaction") }, "Copy hex"),
+        el("button", { type: "button", class: "btn ghost", onclick: () => download(name + ".txn", hex + "\n", "text/plain") }, "Download .txn"),
+        r.finalpsbt && r.finalpsbt.psbt ? el("button", { type: "button", class: "btn ghost", onclick: () => download(name + "-final.psbt", base64_to_bytes(r.finalpsbt.psbt), "application/octet-stream") }, "Download finalized PSBT") : null,
+        tx ? el("button", { type: "button", class: "btn ghost", onclick: () => copy_text(tx.txid, "the txid") }, "Copy txid") : null));
+    box.hidden = false;
+}
+
+function render_partial(job, r)
+{
+    const box = $("tx");
+    box.textContent = "";
+    box.append(el("h3", {}, "Combined PSBT (still partial)"), el("div", { class: "hexbox" }, el("pre", {}, r.finalpsbt.psbt)),
+        el("div", { class: "actions" },
+            el("button", { type: "button", class: "btn ghost", onclick: () => copy_text(r.finalpsbt.psbt, "the combined PSBT") }, "Copy combined PSBT"),
+            el("button", { type: "button", class: "btn ghost", onclick: () => download("combined.psbt", base64_to_bytes(r.finalpsbt.psbt), "application/octet-stream") }, "Download .psbt")));
+    box.hidden = false;
+}
+
+async function run_next()
+{
+    if(guest_state !== "ready" || !queue.length) return;
+    const job = queue.shift();
+    guest_state = "busy";
+    current = job;
+    job.steps = [];
+    job.started = Date.now();
+    job.id = "job-" + ++job_count;
+    run_tracker.go("node", 0.05);
+    headline("r", STEP_TITLES.node + "…", "");
+    set_verdict("wait", "Finalizing…", "Each step runs in the guest; open one to see bitcoind's own output.");
+    machine_idle();
+    try
+    {
+        await binaries;
+        const enc = s => new TextEncoder().encode(s);
+        await emulator.create_file("/" + job.id + ".psbts", enc(job.psbts.join("\n") + "\n"));
+        await emulator.create_file("/" + job.id + ".combine.json", enc(JSON.stringify(job.psbts) + "\n"));
+        if(job.descs.length)
+        {
+            await emulator.create_file("/" + job.id + ".descs.json", enc(JSON.stringify(job.descs) + "\n"));
+            await emulator.create_file("/" + job.id + ".descs.lines", enc(job.descs.join("\n") + "\n"));
+        }
+        emulator.serial0_send("sh /mnt/psbt.sh " + job.chain + " " + job.id + "\n");
+    }
+    catch(e)
+    {
+        current = null;
+        guest_state = "ready";
+        run_tracker.fail();
+        set_verdict("bad", "The run could not start", e.message);
+    }
+}
+
+function start(psbts, descs, label)
+{
+    $("input_error").hidden = true;
+    if(!psbts.length) return show_error("Paste at least one PSBT (base64), or drop a .psbt file.");
+    let chain = $("chain").value;
+    try
+    {
+        for(const p of psbts) psbt_paths(base64_to_bytes(p));
+        if(chain === "auto") chain = guess_chain(psbts, descs);
+    }
+    catch(e)
+    {
+        return show_error("That doesn't look like a PSBT: " + e.message + ". PSBTs start with “cHNidP8” in base64.");
+    }
+    $("result").hidden = false;
+    $("tx").hidden = true;
+    $("checks").textContent = "";
+    $("steps").textContent = "";
+    for(const s of RUN_STAGES) for(const n of s.steps) if(n !== "update" || descs.length) step_element(n);
+    run_tracker = make_tracker("r", RUN_STAGES);
+    if(psbts.length < 2) run_tracker.skipped.add("combine");
+    if(!descs.length) run_tracker.skipped.add("update");
+    run_tracker.render();
+    headline("r", guest_state === "ready" ? "Starting…" : "Queued: the run starts as soon as the machine is ready", guest_state === "ready" ? "" : "Follow the boot above.");
+    set_verdict("wait", "Waiting to finalize " + label + "…", "");
+    queue.length = 0;
+    queue.push({ psbts, descs, chain, label });
+    $("result").scrollIntoView({ behavior: "smooth", block: "start" });
+    run_next();
+}
+
+function show_error(message)
+{
+    $("input_error").textContent = message;
+    $("input_error").hidden = false;
+}
+
+// --- input -------------------------------------------------------------------------------------------------
+
+let toast_timer;
+function toast(text)
+{
+    $("toast").textContent = text;
+    $("toast").classList.add("show");
+    clearTimeout(toast_timer);
+    toast_timer = setTimeout(() => $("toast").classList.remove("show"), 1600);
+}
+function copy_text(text, what)
+{
+    if(navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast("Copied " + what), () => {});
+}
+function download(name, data, type)
+{
+    const url = URL.createObjectURL(new Blob([data], { type }));
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// A .psbt file: binary (starts with "psbt\xff") or base64 text.
+async function file_to_base64(file)
+{
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if(bytes[0] === 0x70 && bytes[1] === 0x73 && bytes[2] === 0x62 && bytes[3] === 0x74 && bytes[4] === 0xff) return [bytes_to_base64(bytes)];
+    return psbts_from_text(new TextDecoder().decode(bytes));
+}
+
+async function add_files(files)
+{
+    const found = [];
+    for(const f of files)
+    {
+        try { found.push(...await file_to_base64(f)); }
+        catch(e) { show_error(f.name + ": " + e.message); }
+    }
+    const text = $("psbt_text").value.trim();
+    $("psbt_text").value = (text ? text + "\n" : "") + found.join("\n");
+    toast("Added " + found.length + " PSBT" + (found.length === 1 ? "" : "s"));
+}
+
+const descs_from_text = text => text.split(/\n+/).map(s => s.trim()).filter(s => /^[a-z_]+\(/.test(s));
+
+$("go").addEventListener("click", () => start(psbts_from_text($("psbt_text").value), descs_from_text($("desc_text").value), "your PSBTs"));
+$("file").addEventListener("change", e => { add_files([...e.target.files]); e.target.value = ""; });
+const drop = $("drop");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); add_files([...e.dataTransfer.files]); });
+
+// samples (psbt-samples/): signet test keys spending made-up coins, signed but not finalized
+const SAMPLES = [
+    { name: "2-of-2, one signer", files: ["multisig-alice.psbt"], desc: "Alice has signed; Bob hasn't.", expect: "not complete" },
+    { name: "2-of-2, both signers", files: ["multisig-alice.psbt", "multisig-bob.psbt"], desc: "Alice's and Bob's PSBTs, combined then finalized.", expect: "finalized" },
+    { name: "Timelocked to 2030", files: ["timelock-2030.psbt"], desc: "after(2030-03-17), with nLockTime set to match.", expect: "finalized at block 0" },
+    { name: "Locktime too low", files: ["timelock-too-low.psbt"], desc: "The same script, signed with nLockTime 0.", expect: "can't be finalized" },
+];
+for(const s of SAMPLES)
+{
+    $("samples").append(el("button", { type: "button", class: "sample", onclick: async () =>
+    {
+        const texts = await Promise.all(s.files.map(f => fetch("psbt-samples/" + f).then(r => { if(!r.ok) throw new Error(f + ": " + r.status); return r.text(); })));
+        const psbts = texts.flatMap(psbts_from_text);
+        $("psbt_text").value = psbts.join("\n");
+        $("desc_text").value = "";
+        $("chain").value = "auto";
+        start(psbts, [], "the “" + s.name + "” sample");
+    } }, el("b", {}, s.name), el("span", {}, s.desc), el("em", {}, "expected: " + s.expect)));
+}
+
+window.onload = start_machine;
+</script>
+</body>
+</html>

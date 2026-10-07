@@ -12,6 +12,7 @@ Live: https://portlandhodl.github.io/wasm-bitcoin-tools/ is a directory of all t
 |---|---|
 | [apps/bitcoin-wallet-check.html](apps/bitcoin-wallet-check.html) | Imports a `wallet.dat` (SQLite restored, Berkeley DB migrated), optionally unlocks it, and lists its descriptors and addresses. Demo wallets in [apps/bitcoin-wallets/](apps/bitcoin-wallets/) run with one click. |
 | [apps/anchorwatch-recovery.html](apps/anchorwatch-recovery.html) | Reads an AnchorWatch Trident Vault recovery kit (PDF) and has Bitcoin Core validate its descriptors, create the watch-only wallet, list the receive and change addresses and back up the wallet for download. |
+| [apps/psbt-finalizer.html](apps/psbt-finalizer.html) | Combines PSBTs from several signers, fills in scripts from public descriptors, reports what each input still needs and finalizes them with `finalizepsbt`, on a wallet-less node at block 0. Timelocked spends finalize too: `after()`/`older()` are checked against the transaction's own `nLockTime`/`nSequence`. Samples in [apps/psbt-samples/](apps/psbt-samples/). |
 
 ## Layout
 

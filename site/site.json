@@ -39,6 +39,24 @@
                 "miniscript",
                 "wallet export"
             ]
+        },
+        {
+            "page": "psbt-finalizer",
+            "title": "PSBT finalizer: combine and finalize PSBTs with Bitcoin Core, offline, in your browser",
+            "description": "Paste or drop partially signed Bitcoin transactions: an unmodified Bitcoin Core 31.1, offline at block 0 in a Linux VM in the tab, combines them, reports what's missing and finalizes them, timelocked spends included. No wallet, no keys, nothing uploaded.",
+            "theme_color": "#0a0b0d",
+            "files": [
+                "apps/psbt-samples/*.psbt"
+            ],
+            "name": "PSBT finalizer",
+            "tagline": "Combine signers' PSBTs, see what each input still needs, and finalize with finalizepsbt. Timelocked spends finalize at block 0: the locktime is checked against the transaction, not the chain.",
+            "icon": "seal",
+            "tags": [
+                "PSBT",
+                "combinepsbt",
+                "finalizepsbt",
+                "timelocks"
+            ]
         }
     ],
     "links": [
