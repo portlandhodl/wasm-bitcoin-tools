@@ -51,3 +51,16 @@ Put the page in `apps/`, loading the emulator from `../v86_64/` and the images f
 as the existing pages do. Then add an entry to `apps` in `site/site.json` with its name, tagline,
 icon, tags, link preview and the extra `files` it fetches. The directory and the Pages build
 pick it up from there.
+
+## License
+
+Everything in this repository is [MIT](LICENSE)-licensed: the pages, scripts, site and link
+preview cards, and the demo wallets and sample PSBTs. What it builds on keeps its own license:
+
+- `v86_64/` (the emulator, a submodule): the v86 contributors' BSD 2-Clause license; see
+  [v86_64/LICENSE](https://github.com/portlandhodl/v86_64/blob/master/LICENSE).
+- Bitcoin Core: MIT. Alpine Linux and the glibc runtime are GPL/LGPL. These are downloaded
+  from their official releases by the staging scripts and are not in this repository; the
+  published site serves them unmodified.
+- The AnchorWatch name and wordmark are AnchorWatch's trademarks, used to identify the
+  recovery kits the check reads. The MIT license covers the code, not the marks.
