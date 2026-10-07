@@ -742,7 +742,7 @@ async function sha256_hex(data)
 async function load_binaries()
 {
     const r = await fetch(BITCOIN_DIR + "manifest.json");
-    if(!r.ok) throw new Error("images/bitcoin/manifest.json is missing: run ./tools/stage-bitcoin.sh");
+    if(!r.ok) throw new Error("images/bitcoin/manifest.json is missing: run ./scripts/stage-bitcoin.sh");
     const manifest = await r.json();
     $("btc_version").textContent = manifest.bitcoin_core;
     $("footer").textContent = "Guest: Alpine Linux 3.19 (virt), " + MEMORY_MB + " MiB, no network device. " +
