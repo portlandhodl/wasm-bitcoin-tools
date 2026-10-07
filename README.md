@@ -22,6 +22,8 @@ Live: https://portlandhodl.github.io/wasm-bitcoin-tools/ is a directory of all t
 - `apps/`: the tools, one HTML page each, with their own files next to them.
 - `images/` (not in git): the Alpine guest and Bitcoin Core with its glibc runtime, staged
   by `scripts/stage-alpine.sh` and `scripts/stage-bitcoin.sh`.
+- `site/og-*.html`: the link preview cards (1200x630), rendered to `site/og-*.png` by
+  `scripts/render-og.sh`; `site/site.json` says which page uses which.
 - `index.html`: the directory of the tools. Its cards, and each page's link preview, come
   from [site/site.json](site/site.json).
 - `scripts/build-site.mjs`: assembles the GitHub Pages site in `_site/`, with the same

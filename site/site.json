@@ -38,7 +38,9 @@
                 "recovery kit PDF",
                 "miniscript",
                 "wallet export"
-            ]
+            ],
+            "image": "og-anchorwatch-recovery.png",
+            "image_alt": "Vault recovery check: Bitcoin Core 31.1 accepts an AnchorWatch vault, its checksums, import, addresses and export marked ok"
         },
         {
             "page": "psbt-finalizer",
@@ -56,7 +58,9 @@
                 "combinepsbt",
                 "finalizepsbt",
                 "timelocks"
-            ]
+            ],
+            "image": "og-psbt-finalizer.png",
+            "image_alt": "PSBT finalizer: a timelocked PSBT finalized at block 0, broadcastable from 17 March 2030"
         }
     ],
     "links": [
@@ -71,5 +75,7 @@
                 "emulator"
             ]
         }
-    ]
+    ],
+    "image": "og-home.png",
+    "image_alt": "wasm-bitcoin-tools: the Bitcoin Core wallet check, the AnchorWatch vault recovery check and the PSBT finalizer, run offline in the browser"
 }

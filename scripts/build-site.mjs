@@ -91,7 +91,8 @@ function publish(rel, card)
     fs.writeFileSync(path.join(out, rel), html);
 }
 
-publish("index.html", { title: site.title, description: site.description, theme_color: "#0d1b1c" });
+publish("index.html", { title: site.title, description: site.description, image: site.image, image_alt: site.image_alt, theme_color: "#0d1b1c" });
+if(site.image) copy(`site/${site.image}`, site.image);
 copy("site/site.json");   // the directory's cards
 for(const app of site.apps)
 {
