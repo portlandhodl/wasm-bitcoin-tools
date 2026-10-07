@@ -6,7 +6,11 @@ an x86-64 emulator in WebAssembly. It then runs the official x86_64 Bitcoin Core
 networking disabled, and drives it over the serial console. Files reach the machine through a
 virtio 9p share in the page, and results come back the same way. Nothing is uploaded.
 
-Live: https://portlandhodl.github.io/wasm-bitcoin-tools/ is a directory of all the tools.
+Live: https://portlandhodl.github.io/wasm-bitcoin-tools/ is a directory of all the tools. The
+hosted pages are for trying them out: for anything that matters, take the single-file version
+of a tool from the [offline release](https://github.com/portlandhodl/wasm-bitcoin-tools/releases/tag/offline),
+audit it, and open it straight from disk on an air-gapped computer. Never use real bitcoins.
+Opened from anywhere but a local file, each page asks the user to acknowledge this first.
 
 | Tool | What it does |
 |---|---|
@@ -29,6 +33,10 @@ Live: https://portlandhodl.github.io/wasm-bitcoin-tools/ is a directory of all t
 - `scripts/build-site.mjs`: assembles the GitHub Pages site in `_site/`, with the same
   layout. [.github/workflows/pages.yml](.github/workflows/pages.yml) runs it on every
   push to master.
+- `scripts/build-offline.mjs`: builds the single-file version of each tool in `_offline/`
+  (~117 MB each), with the emulator, Alpine, Bitcoin Core and the samples inline, so it runs
+  from `file://` with nothing to fetch. The same workflow attaches them, with `SHA256SUMS`,
+  to the `offline` release.
 
 ## Running it locally
 

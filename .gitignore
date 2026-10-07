@@ -2,3 +2,4 @@
 /images/
 # scripts/build-site.mjs
 /_site/
+/_offline/

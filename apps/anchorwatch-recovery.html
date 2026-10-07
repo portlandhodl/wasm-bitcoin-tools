@@ -285,85 +285,81 @@ Setup (from the repository root):
         table.addrs td.p { display: none; }
     }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-    /* safety gate: a notice the user must acknowledge whenever the page isn't opened from a local file */
+    /* offline notice: shown, and answered, whenever the page isn't opened from a local file */
     #safety_gate { position: fixed; inset: 0; z-index: 1000; display: flex; overflow-y: auto; padding: 24px 16px;
-                   background: color-mix(in srgb, var(--bg) 70%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-                   color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+                   background: color-mix(in srgb, var(--bg) 62%, transparent); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+                   color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; opacity: 0; transition: opacity .24s ease; }
     #safety_gate[hidden] { display: none; }
-    #safety_gate .gate-box { width: min(600px, 100%); margin: auto; padding: 26px 26px 22px; border-radius: 16px; background: var(--card);
-                             border: 1px solid var(--line); border-top: 6px solid var(--bad); box-shadow: var(--shadow); }
-    #safety_gate .kicker { font: 600 12px/1 system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--bad); }
-    #safety_gate h2 { display: block; margin: 8px 0 6px; font: 600 28px/1.15 var(--serif, Georgia, serif); color: var(--bad);
-                      letter-spacing: normal; text-transform: none; }
-    #safety_gate .where { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
-    #safety_gate ul { margin: 0; padding: 0; list-style: none; }
-    #safety_gate li { position: relative; margin: 8px 0; padding-left: 24px; font-weight: 600; }
-    #safety_gate li::before { content: "\26A0"; position: absolute; left: 0; color: var(--bad); }
-    #safety_gate .never { margin: 16px 0; padding: 12px; border-radius: 10px; background: var(--bad-bg); border: 1px solid var(--bad); color: var(--bad);
-                          text-align: center; font-size: 20px; font-weight: 800; letter-spacing: .04em; }
-    #safety_gate .ask { margin: 0 0 10px; color: var(--muted); }
-    #safety_gate .ask b { display: inline-block; min-width: 1.7em; padding: 0 6px; border-radius: 6px; background: var(--bad); color: var(--card);
-                          text-align: center; font-size: 17px; }
-    #safety_gate .keys { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; }
-    #safety_gate .keys button { padding: 10px 0; border: 1px solid var(--line2); border-radius: 8px; background: var(--card2, var(--card)); color: var(--fg);
-                                font: 600 17px/1 ui-monospace, Menlo, monospace; cursor: pointer; }
-    #safety_gate .keys button:hover, #safety_gate .keys button:focus-visible { border-color: var(--bad); color: var(--bad); outline: none; }
-    #safety_gate .wrong { min-height: 1.5em; margin: 10px 0 0; color: var(--bad); font-size: 13.5px; font-weight: 600; }
-    @media (max-width: 520px) { #safety_gate .keys { grid-template-columns: repeat(5, 1fr); } #safety_gate h2 { font-size: 23px; } }
+    #safety_gate.shown { opacity: 1; }
+    #safety_gate .gate-card { width: min(500px, 100%); margin: auto; padding: 28px 28px 24px; border-radius: 16px; text-align: center;
+                              border: 1px solid var(--bad); background: color-mix(in srgb, var(--bad) 7%, var(--card)); box-shadow: var(--shadow); }
+    #safety_gate .gate-icon { display: block; width: 44px; height: 44px; margin: 0 auto; color: var(--bad); }
+    #safety_gate h2 { display: block; margin: 12px 0 18px; font: 700 15px/1.2 system-ui, -apple-system, "Segoe UI", sans-serif;
+                      letter-spacing: .1em; text-transform: uppercase; color: var(--bad); }
+    #safety_gate p { max-width: 400px; margin: 0 auto 14px; }
+    #safety_gate strong { font-weight: 650; }
+    #safety_gate .where { color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
+    #safety_gate a { color: inherit; text-decoration-color: var(--bad); text-underline-offset: 3px; }
+    #safety_gate .word { display: inline-block; padding: 0 7px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em;
+                         text-transform: uppercase; vertical-align: 1px; }
+    #safety_gate .word.offline { background: var(--ok-bg); color: var(--ok); }
+    #safety_gate .word.online { background: var(--bad-bg); color: var(--bad); }
+    #safety_gate .proof-label { margin-top: 22px; color: var(--muted); }
+    #safety_gate .proof-row { display: flex; justify-content: center; align-items: stretch; gap: 10px; }
+    #safety_gate .proof-row input { width: 56px; margin: 0; padding: 8px 0; border: 1px solid var(--line2); border-radius: 9px; background: var(--card);
+                                    color: var(--fg); text-align: center; font: 700 17px/1 ui-monospace, Menlo, monospace; }
+    #safety_gate .proof-row input:focus { outline: 2px solid var(--bad); outline-offset: -1px; border-color: transparent; }
+    #safety_gate .proof-row .btn[disabled] { background: transparent; border-color: var(--line2); color: var(--muted); opacity: 1; cursor: not-allowed; }
+    @media (prefers-reduced-motion: reduce) { #safety_gate { transition: none; } }
 </style>
 </head>
 <body>
-<div id="safety_gate" role="alertdialog" aria-modal="true" aria-labelledby="gate_title" hidden>
-    <div class="gate-box">
-        <div class="kicker">Read before continuing</div>
-        <h2 id="gate_title">This page is not running offline</h2>
-        <p class="where">This page was loaded from <span id="gate_origin"></span>, not from a local file.</p>
-        <ul>
-            <li>Never use this tool on an online computer.</li>
-            <li>Only use it on an air-gapped computer: download it, disconnect from every network, then open the local copy.</li>
-            <li>Audit the source before you trust it with anything.</li>
-        </ul>
-        <div class="never">NEVER USE REAL BITCOINS</div>
-        <p class="ask">To confirm that you understand and agree, press <b id="gate_digit"></b> on your keyboard or below.</p>
-        <div class="keys" id="gate_keys"></div>
-        <p class="wrong" id="gate_wrong" aria-live="assertive"></p>
+<div id="safety_gate" role="alertdialog" aria-modal="true" aria-labelledby="gate_title" aria-describedby="gate_text" hidden>
+    <div class="gate-card">
+        <svg class="gate-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v4M12 17.5h.01"/></svg>
+        <h2 id="gate_title">Run it offline</h2>
+        <div id="gate_text">
+            <p class="where">This copy was loaded from <span id="gate_origin"></span>.</p>
+            <p>These tools are meant for <span class="word offline">offline</span> use on an air&#8209;gapped computer, never on one that is <span class="word online">online</span>.</p>
+            <p><a href="https://github.com/portlandhodl/wasm-bitcoin-tools/releases/tag/offline"><strong>Download the single-file version</strong></a>, audit the source, disconnect from every network, then open the file.</p>
+            <p><strong>Never use real bitcoins.</strong> Test coins and the samples are what these tools are for.</p>
+            <p class="proof-label" id="gate_proof_label">Type the number <span id="gate_word"></span> to show you read this.</p>
+        </div>
+        <div class="proof-row">
+            <input id="gate_proof" type="text" inputmode="numeric" maxlength="1" autocomplete="off" spellcheck="false" aria-labelledby="gate_proof_label">
+            <button class="btn" id="gate_accept" type="button" disabled>I understand</button>
+        </div>
     </div>
 </div>
 <script>
-// Anything but a local file gets the safety gate, acknowledged by pressing one randomly chosen digit.
+// Anything but a local file gets the offline notice. It can't be dismissed except by typing the
+// randomly chosen digit it spells out, and nothing behind it takes focus or keys until then.
 (() => {
     if(location.protocol === "file:") return;
-    const gate = document.getElementById("safety_gate"), digit = String(1 + Math.floor(Math.random() * 9));
-    document.getElementById("gate_origin").textContent = location.origin;
-    document.getElementById("gate_digit").textContent = digit;
-    const keys = document.getElementById("gate_keys");
-    for(let n = 1; n <= 9; n++)
+    const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+    const $g = id => document.getElementById(id);
+    const gate = $g("safety_gate"), proof = $g("gate_proof"), accept = $g("gate_accept");
+    const digit = String(1 + Math.floor(Math.random() * 9));
+    $g("gate_origin").textContent = location.origin;
+    $g("gate_word").textContent = WORDS[digit];
+    proof.addEventListener("input", () => { accept.disabled = proof.value.trim() !== digit; });
+    proof.addEventListener("keydown", e => { if(e.key === "Enter" && !accept.disabled) close(); });
+    accept.addEventListener("click", close);
+    // Tab only moves between the field and the button
+    gate.addEventListener("keydown", e =>
     {
-        const b = document.createElement("button");
-        b.type = "button"; b.textContent = n; b.onclick = () => answer(String(n));
-        keys.appendChild(b);
-    }
-    function answer(key)
-    {
-        if(key !== digit)
-        {
-            document.getElementById("gate_wrong").textContent = "That was " + key + ". Press " + digit + " to confirm.";
-            return;
-        }
-        gate.hidden = true;
-        window.removeEventListener("keydown", on_key, true);
-    }
-    function on_key(e)
-    {
-        // nothing behind the gate gets the keyboard until it's acknowledged
-        e.stopImmediatePropagation();
-        if(e.key === "Tab") return;
+        if(e.key !== "Tab") return;
         e.preventDefault();
-        if(/^[1-9]$/.test(e.key)) answer(e.key);
+        (document.activeElement === proof && !accept.disabled ? accept : proof).focus();
+    });
+    gate.addEventListener("focusout", e => { if(!gate.hidden && !gate.contains(e.relatedTarget)) setTimeout(() => proof.focus()); });
+    function close()
+    {
+        gate.classList.remove("shown");
+        setTimeout(() => gate.remove(), matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 240);
     }
-    window.addEventListener("keydown", on_key, true);
     gate.hidden = false;
-    keys.firstChild.focus();
+    requestAnimationFrame(() => requestAnimationFrame(() => { gate.classList.add("shown"); proof.focus(); }));
 })();
 </script>
 <header class="hero">
@@ -1369,7 +1365,7 @@ async function load_binaries()
 function start_machine()
 {
     $("m_spec").textContent = "x86-64 \u00b7 " + MEMORY_MB + " MiB \u00b7 Alpine Linux 3.19 \u00b7 no network";
-    emulator = new V86({
+    emulator = new V86(offline_files({
         wasm_path: "../v86_64/build/v86.wasm",
         memory_size: MEMORY_MB * 1024 * 1024,
         vga_memory_size: 8 * 1024 * 1024,
@@ -1386,7 +1382,7 @@ function start_machine()
         autostart: true,
         disable_keyboard: true,
         disable_mouse: true,
-    });
+    }));
     window.emulator = emulator;
     boot.go("fetch", 0);
     headline("m", "Downloading the machine…", "BIOS, Linux kernel and initramfs");
@@ -2144,7 +2140,10 @@ $("paste_go").addEventListener("click", () =>
 });
 for(const c of document.querySelectorAll(".chip[data-n]")) c.addEventListener("click", () => { $("count").value = c.dataset.n; });
 
-window.onload = start_machine;
+// The single-file offline build (scripts/build-offline.mjs) carries every file inline: the machine
+// starts once they're unpacked, and gets them as buffers instead of URLs.
+const offline_files = options => window.offline_bundle ? offline_bundle.v86_options(options) : options;
+window.onload = () => (window.offline_bundle ? offline_bundle.ready : Promise.resolve()).then(start_machine);
 </script>
 </body>
 </html>
