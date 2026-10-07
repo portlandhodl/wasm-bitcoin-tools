@@ -1,0 +1,57 @@
+{
+    "site_url": "https://portlandhodl.github.io/wasm-bitcoin-tools/",
+    "site_name": "wasm-bitcoin-tools",
+    "title": "wasm-bitcoin-tools: Bitcoin tools that run Bitcoin Core in your browser",
+    "description": "A directory of Bitcoin tools built on v86_64: each runs an unmodified Bitcoin Core in a Linux machine emulated in WebAssembly in the browser tab, offline. Nothing is uploaded.",
+    "apps": [
+        {
+            "page": "bitcoin-wallet-check",
+            "title": "Bitcoin Core wallet check: prove a wallet.dat opens, offline, in your browser",
+            "description": "Drop a wallet file, or try one of seven demo wallets: it is imported by an unmodified Bitcoin Core 31.1 running in a Linux VM emulated in the tab, with no network device. Nothing is uploaded.",
+            "image": "og-bitcoin-wallet-check.png",
+            "image_alt": "Bitcoin Core wallet check: an encrypted demo wallet imported and unlocked offline, every step marked ok",
+            "theme_color": "#f7931a",
+            "files": [
+                "apps/bitcoin-wallets/*.dat"
+            ],
+            "name": "Bitcoin Core wallet check",
+            "tagline": "Prove a wallet.dat opens in Bitcoin Core: restored or migrated by a real bitcoind, unlocked with your passphrase, its descriptors and addresses listed.",
+            "icon": "wallet",
+            "tags": [
+                "wallet.dat",
+                "SQLite & Berkeley DB",
+                "passphrase"
+            ]
+        },
+        {
+            "page": "anchorwatch-recovery",
+            "title": "Vault recovery check: verify an AnchorWatch recovery kit with Bitcoin Core, offline, in your browser",
+            "description": "Upload a Trident Vault recovery kit: an unmodified Bitcoin Core 31.1, running offline in a Linux VM emulated in the tab, validates its descriptors, builds the watch-only wallet, lists your receive and change addresses and lets you download the wallet. Nothing is uploaded.",
+            "theme_color": "#014143",
+            "files": [
+                "apps/anchorwatch-recovery/recovery-kit.pdf"
+            ],
+            "name": "AnchorWatch vault recovery check",
+            "tagline": "Upload a Trident Vault recovery kit: Bitcoin Core validates the descriptors, builds the watch-only wallet, lists your addresses and hands the wallet back.",
+            "icon": "anchor",
+            "tags": [
+                "recovery kit PDF",
+                "miniscript",
+                "wallet export"
+            ]
+        }
+    ],
+    "links": [
+        {
+            "name": "v86_64 machine manager",
+            "tagline": "The emulator these tools run on: x86-64 Linux in WebAssembly with a 64-bit JIT. Pick an ISO and boot it.",
+            "href": "https://portlandhodl.github.io/v86_64/",
+            "icon": "chip",
+            "tags": [
+                "x86-64",
+                "WebAssembly",
+                "emulator"
+            ]
+        }
+    ]
+}

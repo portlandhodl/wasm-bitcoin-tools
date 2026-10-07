@@ -1,0 +1,4 @@
+# staged by scripts/stage-alpine.sh and scripts/stage-bitcoin.sh
+/images/
+# scripts/build-site.mjs
+/_site/
